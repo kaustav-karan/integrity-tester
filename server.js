@@ -158,7 +158,12 @@ app.post("/analysis-result", bodyParser.json(), async (req, res) => {
 
       //once refId recieved then do a post request to the encoder
       try {
-        await axios.post(
+        broadcast({
+          event: "sentToEncoder",
+          msg: `Sent ${objectName} to encoder with refId ${refId}`,
+        });
+        log(`Sent ${objectName} to encoder with refId ${refId}`);        
+        const response = await axios.post(
           `http://${process.env.ENCODER}/convert`,
           {
             refId: refId,
@@ -170,11 +175,21 @@ app.post("/analysis-result", bodyParser.json(), async (req, res) => {
             },
           }
         );
+        
+        if (response.status !== 200) {
+          throw new Error("Failed to send to encoder");
+        }
+
+        // Remove the object from MinIO after sending to encoder
+        await minioClient.removeObject(MINIO_BUCKET, objectName);
+        log(`Removed ${objectName} after sending to encoder.`);
         broadcast({
-          event: "sentToEncoder",
-          msg: `Sent ${objectName} to encoder with refId ${refId}`,
+          event: "encoderResponse",
+          msg: `Encoder response for ${objectName}: ${response.data}`,
+          refId: refId, // Include refId in the broadcast
         });
-        log(`Sent ${objectName} to encoder with refId ${refId}`);
+        log(`Encoder response for ${objectName}: ${response.data}`);
+        
       } catch (err) {
         console.error("Error posting to encoder:", err);
         return res.status(500).send("Failed to process analysis result.");
