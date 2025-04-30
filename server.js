@@ -184,9 +184,15 @@ app.post("/analysis-result", bodyParser.json(), async (req, res) => {
         await minioClient.removeObject(MINIO_BUCKET, objectName);
         log(`Removed ${objectName} after sending to encoder.`);
         broadcast({
+<<<<<<< HEAD
           event: "encoderResponse",
           msg: `Encoder response for ${objectName}: ${response.data}`,
           refId: refId, // Include refId in the broadcast
+=======
+          event: "sentToEncoder",
+          msg: `Sent ${objectName} to encoder with refId ${refId}`,
+          refId: refId
+>>>>>>> 3bf6bfb5378ac3c54d8ae952302726116ff08f1a
         });
         log(`Encoder response for ${objectName}: ${response.data}`);
         
