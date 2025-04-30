@@ -173,6 +173,7 @@ app.post("/analysis-result", bodyParser.json(), async (req, res) => {
         broadcast({
           event: "sentToEncoder",
           msg: `Sent ${objectName} to encoder with refId ${refId}`,
+          refId: refId
         });
         log(`Sent ${objectName} to encoder with refId ${refId}`);
       } catch (err) {
