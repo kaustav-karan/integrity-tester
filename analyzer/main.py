@@ -41,11 +41,16 @@ while True:
     print(f"Analysis for {object_name}: {'PASSED' if passed else 'FAILED'}")
 
     # Post result back to Node server
-    requests.post(config.NODE_ANALYSIS_RESULT_ENDPOINT, json={
-        'objectName': object_name,
-        'passed': passed,
-        'report': report
-    })
+    try:
+        response = requests.post(config.NODE_ANALYSIS_RESULT_ENDPOINT, json={
+            'objectName': object_name,
+            'passed': passed,
+            'report': report
+        })
+        response.raise_for_status()
+        print(f"Result posted successfully for {object_name}")
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to post result for {object_name}: {e}")
 
     # Clean up
     os.remove(temp_path)

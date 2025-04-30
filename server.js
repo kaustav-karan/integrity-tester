@@ -10,14 +10,14 @@ const WebSocket = require("ws");
 const cors = require("cors");
 const { v4: uuidv4 } = require("uuid");
 require("dotenv").config();
-const axios = require("axios")
+const axios = require("axios");
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
-const PORT = 3000;
+const PORT = 4000;
 
 const MINIO_BUCKET = process.env.MINIO_BUCKET || "";
 
@@ -71,7 +71,6 @@ function broadcast(data) {
       }
     }
   });
-
 }
 
 // presigned URL variable needs to be shared between multiple endpoints hence making it global
@@ -82,15 +81,20 @@ app.post("/upload", upload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).send("No file uploaded.");
 
-  const objectName = file.originalname;
+  // const objectName = file.originalname;
+  const objectName = uuidv4();
   const filePath = file.path;
-  const localFileID = uuidv4();
+  // const localFileID = uuidv4();
 
   try {
     // Upload to MinIO
     broadcast({ event: "uploading", msg: `Uploading ${objectName}` });
     await minioClient.fPutObject(MINIO_BUCKET, objectName, filePath);
-    presignedUrl = await minioClient.presignedGetObject(MINIO_BUCKET, objectName, 0);
+    presignedUrl = await minioClient.presignedGetObject(
+      MINIO_BUCKET,
+      objectName,
+      0 // 0 means no expiration
+    );
     log(`Uploaded: ${objectName}`);
     broadcast({
       event: "uploaded",
@@ -99,7 +103,6 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     fs.unlink(filePath, (err) => {
       if (err) console.error("Failed to delete temp file:", err);
     });
-
 
     // Push message to Redis
     await redis.lpush(
@@ -127,49 +130,63 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 // Endpoint for analyzer to post results
 app.post("/analysis-result", bodyParser.json(), async (req, res) => {
   const { objectName, passed, report } = req.body;
-  let refID = "";
   log(`Analysis result for ${objectName}: ${passed ? "PASSED" : "FAILED"}`);
-  
+
   if (!passed) {
     try {
       await minioClient.removeObject(MINIO_BUCKET, objectName);
       log(`Removed ${objectName} due to failed analysis.`);
+      broadcast({
+        event: "analysisResult",
+        msg: `Analysis result for ${objectName}: ${
+          passed ? "PASSED" : "FAILED"
+        }`,
+        report,
+        refId: refId, // Include refId in the broadcast
+      });
     } catch (e) {
       console.error("Failed to remove file:", e);
     }
-  }else {
-    //if passed then first send a refID generation request to the main server
+  } else {
+    //if passed then first send a refId generation request to the main server
     try {
-      // Post to main server and receive refID
-      const response = await axios.get(`http://${process.env.MAIN_SERVER}/generateRefId`);
-      const { refID } = response.data;
+      // Post to main server and receive refId
+      const response = await axios.get(
+        `http://${process.env.MAIN_SERVER}/generateRefId`
+      );
+      const { refId } = response.data;
+
+      //once refId recieved then do a post request to the encoder
+      try {
+        await axios.post(
+          `http://${process.env.ENCODER}/convert`,
+          {
+            refId: refId,
+            presignedUrl: presignedUrl,
+          },
+          {
+            headers: {
+              "Content-Type": "audio/wav", // or whatever the actual type is
+            },
+          }
+        );
+        broadcast({
+          event: "sentToEncoder",
+          msg: `Sent ${objectName} to encoder with refId ${refId}`,
+        });
+        log(`Sent ${objectName} to encoder with refId ${refId}`);
+      } catch (err) {
+        console.error("Error posting to encoder:", err);
+        return res.status(500).send("Failed to process analysis result.");
+      }
     } catch (err) {
       console.error("Error posting to main server:", err);
-      return res.status(500).send("Failed to process analysis result.");
-    }
-
-    //once refID recieved then do a post request to the encoder
-    try {
-      await axios.post(
-        `http://${ENCODER}:${ENCODER_PORT}/convert`,
-        {
-          refID: refID,
-          presignedUrl: presignedUrl,
-        }
-      );
-    }catch (err) {
-      console.error("Error posting to encoder:", err);
       return res.status(500).send("Failed to process analysis result.");
     }
   }
 
   // You could also notify frontend here (e.g., via WebSocket or polling)
-  broadcast({
-    event: "analysisResult",
-    msg: `Analysis result for ${objectName}: ${passed ? "PASSED" : "FAILED"}`,
-    report,
-    refID: refID, // Include refID in the broadcast
-  });
+
   res.sendStatus(200);
 });
 
@@ -177,7 +194,6 @@ app.post("/analysis-result", bodyParser.json(), async (req, res) => {
 app.get("/health", (req, res) => {
   res.send("OK");
 });
-
 
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
